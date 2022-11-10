@@ -3,4 +3,4 @@
 1. Download MNIST-ROT dataset.
 2. Train models.
 3. Evaluate skip ratio Conv-ReLU++, SparseNN, IDP and SeerNet.
-4. Test
+4. None
