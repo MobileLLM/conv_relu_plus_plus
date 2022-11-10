@@ -1,4 +1,4 @@
-# Anonymous code MOBICOM2023 of "ConvReLU++: Reference-based Lossless Acceleration of Conv-ReLU Operations for Mobile Deep Vision"
+# Code for "ConvReLU++: Reference-based Lossless Acceleration of Conv-ReLU Operations for Mobile Deep Vision"
 
 
 This repo contains three frameworks code, including Pytorch, TFlite-micro and NCNN. Please download pre-trained models and datasets according to our paper. After downloading all codes and assests, compile NCNN and TFlite-micro for reproduce the experiment results.
