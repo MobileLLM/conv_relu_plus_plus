@@ -1,0 +1,196 @@
+// Tencent is pleased to support the open source community by making ncnn available.
+//
+// Copyright (C) 2021 THL A29 Limited, a Tencent company. All rights reserved.
+//
+// Licensed under the BSD 3-Clause License (the "License"); you may not use this file except
+// in compliance with the License. You may obtain a copy of the License at
+//
+// https://opensource.org/licenses/BSD-3-Clause
+//
+// Unless required by applicable law or agreed to in writing, software distributed
+// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+
+static void im2col_sgemm_fp16sa_neon(const Mat& bottom_im2col, Mat& top_blob, const Mat& _kernel, const Mat& _bias, const Option& opt)
+{
+    // Mat bottom_im2col(size, maxk, inch, 2u, 1, opt.workspace_allocator);
+
+    const int size = bottom_im2col.w;
+    const int maxk = bottom_im2col.h;
+    const int inch = bottom_im2col.c;
+
+    const int outch = top_blob.c;
+
+    const __fp16* bias = _bias;
+
+    // permute
+    Mat tmp;
+    tmp.create(maxk, inch, size, 2u, 1, opt.workspace_allocator);
+    {
+#pragma omp parallel for num_threads(opt.num_threads)
+        for (int i = 0; i < size; i++)
+        {
+            __fp16* tmpptr = tmp.channel(i);
+
+            for (int q = 0; q < inch; q++)
+            {
+                const __fp16* img0 = (const __fp16*)bottom_im2col.channel(q) + i;
+
+                for (int k = 0; k < maxk; k++)
+                {
+                    tmpptr[0] = img0[0];
+                    tmpptr += 1;
+                    img0 += size;
+                }
+            }
+        }
+    }
+
+    Mat kernel = _kernel.reshape(maxk, inch, outch);
+
+#pragma omp parallel for num_threads(opt.num_threads)
+    for (int p = 0; p < outch; p++)
+    {
+        Mat out0 = top_blob.channel(p);
+
+        const __fp16 bias0 = bias ? bias[p] : 0.f;
+
+        __fp16* outptr0 = out0;
+
+        for (int i=0; i < size; i++)
+        {
+            const __fp16* tmpptr = tmp.channel(i);
+            const __fp16* kptr = kernel.channel(p);
+
+            int nn = inch * maxk; // inch always > 0
+
+            int q = 0;
+
+            float16x8_t _sum0 = vdupq_n_f16(0.f);
+
+            for (; q + 7 < nn; q += 8)
+            {
+                float16x8_t _p0 = vld1q_f16(tmpptr);
+
+                float16x8_t _k0 = vld1q_f16(kptr);
+
+                _sum0 = vfmaq_f16(_sum0, _p0, _k0);
+
+                tmpptr += 8;
+                kptr += 8;
+            }
+
+            __fp16 sum0 = bias0 + vaddvq_f32(vcvt_f32_f16(vadd_f16(vget_low_f16(_sum0), vget_high_f16(_sum0))));
+
+            for (; q < nn; q++)
+            {
+                sum0 += tmpptr[0] * kptr[0];
+
+                tmpptr++;
+                kptr++;
+            }
+
+            outptr0[0] = sum0;
+
+            outptr0++;
+        }
+    }
+}
+
+static void convolution_im2col_sgemm_transform_kernel_fp16sa_neon(const Mat& _kernel, Mat& kernel_tm, int inch, int outch, int kernel_w, int kernel_h)
+{
+    const int maxk = kernel_w * kernel_h;
+
+    // interleave
+    // src = maxk-inch-outch
+    // dst = 8b-8a-maxk-inch/8a-outch/8b
+    Mat kernel = _kernel.reshape(maxk, inch, outch);
+    kernel_tm.create(8 * maxk, inch, outch / 8 + outch % 8, (size_t)2u);
+
+    int q = 0;
+    for (; q + 7 < outch; q += 8)
+    {
+        __fp16* g00 = kernel_tm.channel(q / 8);
+
+        for (int p = 0; p < inch; p++)
+        {
+            for (int k = 0; k < maxk; k++)
+            {
+                for (int j = 0; j < 8; j++)
+                {
+                    const float* k00 = kernel.channel(q + j).row(p);
+
+                    g00[0] = (__fp16)k00[k];
+
+                    g00++;
+                }
+            }
+        }
+    }
+    for (; q < outch; q++)
+    {
+        __fp16* g00 = kernel_tm.channel(q / 8 + q % 8);
+
+        for (int p = 0; p < inch; p++)
+        {
+            for (int k = 0; k < maxk; k++)
+            {
+                const float* k00 = kernel.channel(q).row(p);
+
+                g00[0] = (__fp16)k00[k];
+
+                g00++;
+            }
+        }
+    }
+}
+
+static void convolution_im2col_sgemm_fp16sa_neon(const Mat& bottom_blob, Mat& top_blob, const Mat& kernel, const Mat& _bias, int kernel_w, int kernel_h, int dilation_w, int dilation_h, int stride_w, int stride_h, const Option& opt)
+{
+    int w = bottom_blob.w;
+    int inch = bottom_blob.c;
+
+    int outw = top_blob.w;
+    int outh = top_blob.h;
+    const int size = outw * outh;
+
+    const int maxk = kernel_w * kernel_h;
+
+    // im2col
+    Mat bottom_im2col(size, maxk, inch, 2u, 1, opt.workspace_allocator);
+    {
+        const int gap = w * stride_h - outw * stride_w;
+
+#pragma omp parallel for num_threads(opt.num_threads)
+        for (int p = 0; p < inch; p++)
+        {
+            const Mat img = bottom_blob.channel(p);
+            __fp16* ptr = bottom_im2col.channel(p);
+
+            for (int u = 0; u < kernel_h; u++)
+            {
+                for (int v = 0; v < kernel_w; v++)
+                {
+                    const __fp16* sptr = img.row<const __fp16>(dilation_h * u) + dilation_w * v;
+
+                    for (int i = 0; i < outh; i++)
+                    {
+                        int j = 0;
+                        for (; j < outw; j++)
+                        {
+                            ptr[0] = sptr[0];
+
+                            sptr += stride_w;
+                            ptr += 1;
+                        }
+
+                        sptr += gap;
+                    }
+                }
+            }
+        }
+    }
+
+    im2col_sgemm_fp16sa_neon(bottom_im2col, top_blob, kernel, _bias, opt);
+}
