@@ -193,22 +193,22 @@ modl.load_state_dict(torch.load('cnn.pt', map_location=device), strict=True)
 modl.conv1.reset_usv()
 modl.conv2.reset_usv()
 
-# criter = nn.CrossEntropyLoss().to(device)
-# optim = torch.optim.Adam(modl.parameters(), lr=l_r)
-# nttlstps = len(trainldr)
-# for epoch in range(numepchs):
-#     modl.train()
-#     for x, (imgs, lbls) in enumerate(trainldr):
-#         imgs = imgs.to(device)
-#         lbls = lbls.to(device)
-#
-#         outp = modl(imgs)
-#
-#         losses = criter(outp, lbls)
-#
-#         optim.zero_grad()
-#         losses.backward()
-#         optim.step()
+criter = nn.CrossEntropyLoss().to(device)
+optim = torch.optim.Adam(modl.parameters(), lr=l_r)
+nttlstps = len(trainldr)
+for epoch in range(numepchs):
+    modl.train()
+    for x, (imgs, lbls) in enumerate(trainldr):
+        imgs = imgs.to(device)
+        lbls = lbls.to(device)
+
+        outp = modl(imgs)
+
+        losses = criter(outp, lbls)
+
+        optim.zero_grad()
+        losses.backward()
+        optim.step()
     
 modl.eval()
 with torch.no_grad():
@@ -224,4 +224,4 @@ with torch.no_grad():
         break
     print('Acc = {}'.format(correct / total))
 
-# torch.save(modl.state_dict(), 'cnn.pt')
+torch.save(modl.state_dict(), 'cnn.pt')

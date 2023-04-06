@@ -169,4 +169,4 @@ with torch.no_grad():
         total += torch.numel(pred)
     print('Acc = {}'.format(correct / total))
 
-# torch.save(modl.state_dict(), 'cnn.pt')
+torch.save(modl.state_dict(), 'cnn.pt')

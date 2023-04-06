@@ -1,5 +1,5 @@
 # Usage
-1. Compile [NCNN](https://github.com/Tencent/ncnn) according to the official tutorial. 
+1. Install CUDA version pytorch.
 
 2. Download all datasets and according to our paper.
 
